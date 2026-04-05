@@ -1,0 +1,220 @@
+name: VS Code x64 Build
+
+on:
+  push:
+    branches:
+      - main
+      - 'release/*'
+  pull_request:
+    branches:
+      - main
+      - 'release/*'
+  workflow_dispatch:
+
+env:
+  VSCODE_ARCH: x64
+  NPM_ARCH: x64
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  build:
+    name: Build VS Code x64
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Prepare node_modules cache key
+        shell: pwsh
+        run: |
+          mkdir .build -ea 0
+          node build/azure-pipelines/common/computeNodeModulesCacheKey.ts win32 ${{ env.VSCODE_ARCH }} $(node -p process.arch) > .build/packagelockhash
+
+      - name: Restore node_modules cache
+        uses: actions/cache/restore@v4
+        id: node-modules-cache
+        with:
+          path: .build/node_modules_cache
+          key: "node_modules-windows-x64-${{ hashFiles('.build/packagelockhash') }}"
+
+      - name: Extract node_modules cache
+        if: steps.node-modules-cache.outputs.cache-hit == 'true'
+        shell: pwsh
+        run: 7z.exe x .build/node_modules_cache/cache.7z -aoa
+
+      - name: Install dependencies
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          . build/azure-pipelines/win32/exec.ps1
+          $ErrorActionPreference = "Stop"
+          
+          for ($i = 1; $i -le 5; $i++) {
+            try {
+              exec { npm ci }
+              break
+            }
+            catch {
+              if ($i -eq 5) {
+                Write-Error "npm ci failed after 5 attempts"
+                throw
+              }
+              Write-Host "npm ci failed attempt $i, retrying..."
+              Start-Sleep -Seconds 2
+            }
+          }
+        env:
+          npm_config_arch: ${{ env.NPM_ARCH }}
+          npm_config_foreground_scripts: "true"
+          VSCODE_ARCH: ${{ env.VSCODE_ARCH }}
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+
+      - name: Create node_modules archive
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          . build/azure-pipelines/win32/exec.ps1
+          $ErrorActionPreference = "Stop"
+          exec { node build/azure-pipelines/common/listNodeModules.ts .build/node_modules_list.txt }
+          exec { mkdir -Force .build/node_modules_cache }
+          exec { 7z.exe a .build/node_modules_cache/cache.7z -mx3 `@.build/node_modules_list.txt }
+
+      - name: Create .build folder
+        shell: pwsh
+        run: mkdir .build -ea 0
+
+      - name: Prepare built-in extensions cache key
+        shell: pwsh
+        run: node build/azure-pipelines/common/computeBuiltInDepsCacheKey.ts > .build/builtindepshash
+
+      - name: Restore built-in extensions cache
+        id: cache-builtin-extensions
+        uses: actions/cache/restore@v4
+        with:
+          enableCrossOsArchive: true
+          path: .build/builtInExtensions
+          key: "builtin-extensions-x64-${{ hashFiles('.build/builtindepshash') }}"
+
+      - name: Download built-in extensions
+        if: steps.cache-builtin-extensions.outputs.cache-hit != 'true'
+        run: node build/lib/builtInExtensions.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Transpile client and extensions
+        shell: pwsh
+        run: npm run gulp "transpile-client-esbuild" "transpile-extensions"
+
+      - name: Download Electron and Playwright
+        shell: pwsh
+        run: |
+          for ($i = 1; $i -le 3; $i++) {
+            try {
+              npm exec -- npm-run-all2 -lp "electron ${{ env.VSCODE_ARCH }}" "playwright-install"
+              break
+            }
+            catch {
+              if ($i -eq 3) {
+                Write-Error "Download failed after 3 attempts"
+                throw
+              }
+              Write-Host "Download failed attempt $i, retrying..."
+              Start-Sleep -Seconds 2
+            }
+          }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build VS Code
+        shell: pwsh
+        run: |
+          . build/azure-pipelines/win32/exec.ps1
+          $ErrorActionPreference = "Stop"
+          exec { npm run gulp compile }
+          exec { npm run gulp "vscode-win32-${{ env.VSCODE_ARCH }}-min" }
+
+      - name: Run unit tests
+        shell: pwsh
+        run: .\scripts\test.bat --tfs "Unit Tests"
+        timeout-minutes: 15
+        continue-on-error: true
+
+      - name: Run integration tests
+        shell: pwsh
+        run: .\scripts\test-integration.bat --tfs "Integration Tests"
+        timeout-minutes: 20
+        continue-on-error: true
+
+      - name: Compile smoke tests
+        working-directory: test/smoke
+        shell: pwsh
+        run: npm run compile
+
+      - name: Compile extensions for smoke tests
+        shell: pwsh
+        run: npm run gulp compile-extension-media
+
+      - name: Run smoke tests
+        shell: pwsh
+        run: npm run smoketest-no-compile -- --tracing
+        timeout-minutes: 20
+        continue-on-error: true
+
+      - name: Publish build artifacts
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: vscode-win32-x64-build
+          path: .build\VSCode-win32-x64
+          retention-days: 7
+
+      - name: Publish crash reports
+        uses: actions/upload-artifact@v4
+        if: failure()
+        continue-on-error: true
+        with:
+          name: crash-dump-windows-x64-${{ github.run_attempt }}
+          path: .build/crashes
+          if-no-files-found: ignore
+
+      - name: Publish node modules
+        uses: actions/upload-artifact@v4
+        if: failure()
+        continue-on-error: true
+        with:
+          name: node-modules-windows-x64-${{ github.run_attempt }}
+          path: node_modules
+          if-no-files-found: ignore
+
+      - name: Publish log files
+        uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: logs-windows-x64-${{ github.run_attempt }}
+          path: .build/logs
+          if-no-files-found: ignore
+
+      - name: Save node_modules cache
+        uses: actions/cache/save@v4
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
+        with:
+          path: .build/node_modules_cache
+          key: "node_modules-windows-x64-${{ hashFiles('.build/packagelockhash') }}"
+
+      - name: Save built-in extensions cache
+        uses: actions/cache/save@v4
+        if: steps.cache-builtin-extensions.outputs.cache-hit != 'true'
+        with:
+          enableCrossOsArchive: true
+          path: .build/builtInExtensions
+          key: "builtin-extensions-x64-${{ hashFiles('.build/builtindepshash') }}"
