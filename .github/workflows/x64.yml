@@ -1,26 +1,16 @@
-name: VS Code Windows x64 Build
+name: VS Code Windows x64 Build (Portable Folder Only)
 
 on:
   workflow_dispatch:
-    inputs:
-      quality:
-        description: 'Build quality (oss, stable, insider)'
-        required: false
-        default: 'oss'
-        type: choice
-        options:
-          - oss
-          - stable
-          - insider
   push:
     branches:
       - main
-      - 'release/*'
   pull_request:
     branches:
       - main
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # 消除 Node20 警告
   VSCODE_QUALITY: 'oss'
   VSCODE_ARCH: 'x64'
 
@@ -48,8 +38,7 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          npm install -g gulp
-          npm install -g typescript
+          npm install -g gulp typescript
         shell: pwsh
 
       - name: Install project dependencies
@@ -61,160 +50,26 @@ jobs:
         shell: pwsh
 
       - name: Compile project
-        run: |
-          npm run compile
+        run: npm run compile
         shell: pwsh
 
-      - name: List available gulp tasks
-        run: |
-          npm run gulp -- --tasks
+      # 只编译：绿色版、带所有依赖、可直接运行的文件夹
+      - name: Build VS Code Win32 x64
+        run: npm run gulp vscode-win32-x64-min-ci
         shell: pwsh
 
-      - name: Build VS Code Windows x64 (CI Build)
-        run: |
-          npm run gulp vscode-win32-x64-min-ci
-        shell: pwsh
-
-      - name: Verify VS Code build output
-        run: |
-          Write-Host "=== Checking VS Code build directory ==="
-          $vscodePath = "..\VSCode-win32-x64"
-          if (Test-Path $vscodePath) {
-            Write-Host "VS Code build directory found at: $vscodePath"
-            Write-Host "=== Directory contents ==="
-            Get-ChildItem -Path $vscodePath | Select-Object Name, Length
-            Write-Host "=== Checking for main executable ==="
-            $exePath = Join-Path $vscodePath "code.exe"
-            if (Test-Path $exePath) {
-              Write-Host "Main executable found: $exePath"
-            } else {
-              Write-Warning "Main executable not found at: $exePath"
-            }
-          } else {
-            Write-Error "VS Code build directory not found at: $vscodePath"
-            Write-Host "=== Listing parent directory contents ==="
-            Get-ChildItem -Path ".." | Select-Object Name
-            exit 1
-          }
-        shell: pwsh
-
-      - name: Build VS Code Server
-        run: |
-          npm run gulp vscode-reh-win32-x64-min-ci
-        shell: pwsh
-
-      - name: Build Inno Setup Updater
-        run: |
-          npm run gulp vscode-win32-x64-inno-updater
-        shell: pwsh
-
-      - name: Verify Inno Setup Updater
-        run: |
-          Write-Host "=== Checking Inno Setup updater ==="
-          $updaterPath = "..\VSCode-win32-x64\tools\inno_updater.exe"
-          if (Test-Path $updaterPath) {
-            Write-Host "Inno Setup updater found: $updaterPath"
-          } else {
-            Write-Warning "Inno Setup updater not found at: $updaterPath"
-            Write-Host "=== Checking tools directory ==="
-            $toolsPath = "..\VSCode-win32-x64\tools"
-            if (Test-Path $toolsPath) {
-              Get-ChildItem -Path $toolsPath | Select-Object Name, Length
-            } else {
-              Write-Warning "Tools directory not found"
-            }
-          }
-        shell: pwsh
-
-      - name: Package Windows System Setup
-        run: |
-          npm run gulp vscode-win32-x64-system-setup
-        shell: pwsh
-
-      - name: Package Windows User Setup
-        run: |
-          npm run gulp vscode-win32-x64-user-setup
-        shell: pwsh
-
-      - name: Verify Installers
-        run: |
-          Write-Host "=== Checking for installers ==="
-          $systemSetupPath = ".build\win32-x64\system-setup"
-          $userSetupPath = ".build\win32-x64\user-setup"
-
-          Write-Host "=== System Setup Directory ==="
-          if (Test-Path $systemSetupPath) {
-            Get-ChildItem -Path $systemSetupPath | Select-Object Name, Length
-          } else {
-            Write-Warning "System setup directory not found"
-          }
-
-          Write-Host "=== User Setup Directory ==="
-          if (Test-Path $userSetupPath) {
-            Get-ChildItem -Path $userSetupPath | Select-Object Name, Length
-          } else {
-            Write-Warning "User setup directory not found"
-          }
-
-          Write-Host "=== Listing all .exe files in build directory ==="
-          Get-ChildItem -Path ".build" -Recurse -Filter "*.exe" | Select-Object FullName, Length
-        shell: pwsh
-
-      - name: Create Archive
+      # 打包成 zip 方便下载
+      - name: Create portable archive
         run: |
           Compress-Archive -Path ..\VSCode-win32-x64\* -DestinationPath ..\VSCode-win32-x64.zip
         shell: pwsh
 
-      - name: Upload artifacts
+      # 上传产物：只有绿色版文件夹 + zip
+      - name: Upload portable build
         uses: actions/upload-artifact@v4
         with:
-          name: vscode-windows-x64-artifacts
+          name: VSCode-Win32-x64-Portable
           path: |
+            ../VSCode-win32-x64/
             ../VSCode-win32-x64.zip
-            .build/win32-x64/system-setup/
-            .build/win32-x64/user-setup/
           retention-days: 7
-          if-no-files-found: warn
-
-      - name: Upload release artifacts
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/upload-artifact@v4
-        with:
-          name: vscode-windows-x64-release
-          path: |
-            ../VSCode-win32-x64.zip
-            .build/win32-x64/system-setup/
-            .build/win32-x64/user-setup/
-          retention-days: 90
-
-  release:
-    name: Create Release
-    needs: build-windows-x64
-    runs-on: windows-2022
-    if: startsWith(github.ref, 'refs/tags/')
-
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: vscode-windows-x64-release
-          path: ./release-artifacts
-
-      - name: List downloaded artifacts
-        run: |
-          Write-Host "=== Downloaded artifacts ==="
-          Get-ChildItem -Path ./release-artifacts -Recurse | Select-Object FullName, Length
-        shell: pwsh
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            ./release-artifacts/VSCode-win32-x64.zip
-            ./release-artifacts/system-setup/VSCodeSetup.exe
-            ./release-artifacts/user-setup/VSCodeSetup.exe
-          generate_release_notes: true
-          draft: false
-          prerelease: ${{ contains(github.ref, 'insider') }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
