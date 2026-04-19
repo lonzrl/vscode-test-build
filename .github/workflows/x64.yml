@@ -1,55 +1,63 @@
-name: VS Code Windows x64 Portable Build
+name: Windows-x64-Portable-Build
+# 强制：推送代码自动触发 + 页面手动触发双保险，GitHub强制识别加载
 on:
-  workflow_dispatch:
+  workflow_dispatch: # 页面手动一键运行
+  push:
+    branches: [ main ] # 推送main分支自动触发
 
 env:
+  # 彻底解决GitHub Node20弃用全局警告
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # VSCode官方构建环境变量锁死
   VSCODE_QUALITY: oss
   VSCODE_ARCH: x64
+  # 强制下载Electron内核，根治之前preload.js文件缺失报错
   ELECTRON_SKIP_BINARY_DOWNLOAD: 0
+  # 跳过无用浏览器依赖，加快构建速度
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
 
 jobs:
   build-windows-x64:
+    name: Build Windows x64 纯绿色免安装包
     runs-on: windows-2022
     steps:
-      - name: Checkout code
+      - name: 拉取仓库源码
         uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
-      - name: Setup Node.js
+      - name: 配置Node.js环境（匹配仓库nvmrc版本）
         uses: actions/setup-node@v4
         with:
           node-version-file: '.nvmrc'
           cache: 'npm'
 
-      - name: Setup Python
+      - name: 配置Python编译环境（VSCode原生依赖必须）
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Global tools install
+      - name: 全局安装构建工具gulp、ts
         run: |
           npm install -g gulp typescript
         shell: pwsh
 
-      - name: Install all dependencies
+      - name: 完整安装项目所有依赖
         run: npm ci
         shell: pwsh
 
-      - name: Full TypeScript compile
+      - name: 全量TS源码编译
         run: npm run compile
         shell: pwsh
 
-      - name: Build full portable win32-x64 folder
+      - name: 官方完整版构建Windows绿色文件夹（根治所有文件缺失报错）
         run: npm run gulp vscode-win32-x64
         shell: pwsh
 
-      - name: Upload full portable code folder
+      - name: 上传最终产物（仅完整运行文件夹，无任何安装包、无setup程序）
         uses: actions/upload-artifact@v4
         with:
-          name: VSCode-win32-x64
+          name: VSCode-win32-x64-完整绿色版
           path: ../vscode-win32-x64/
-          retention-days: 7
+          retention-days: 30
           if-no-files-found: error
