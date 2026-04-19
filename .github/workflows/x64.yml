@@ -3,11 +3,9 @@ on:
   workflow_dispatch:
 
 env:
-  # 强制Node24，彻底消除GitHub Node20弃用警告
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   VSCODE_QUALITY: oss
   VSCODE_ARCH: x64
-  # 必须下载Electron，之前SKIP导致文件缺失根源
   ELECTRON_SKIP_BINARY_DOWNLOAD: 0
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
 
@@ -44,12 +42,10 @@ jobs:
         run: npm run compile
         shell: pwsh
 
-      # 官方完整构建指令，不是min-ci精简版！彻底解决preload.js缺失报错
       - name: Build full portable win32-x64 folder
         run: npm run gulp vscode-win32-x64
         shell: pwsh
 
-      # 仅上传完整绿色文件夹，无任何安装包、无setup、无打包程序
       - name: Upload full portable code folder
         uses: actions/upload-artifact@v4
         with:
