@@ -1,29 +1,24 @@
-name: VS Code Windows x64 Build (Portable Folder Only)
-
+name: VS Code Windows x64 Portable Build
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # 消除 Node20 警告
-  VSCODE_QUALITY: 'oss'
-  VSCODE_ARCH: 'x64'
+  # 强制Node24，彻底消除GitHub Node20弃用警告
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  VSCODE_QUALITY: oss
+  VSCODE_ARCH: x64
+  # 必须下载Electron，之前SKIP导致文件缺失根源
+  ELECTRON_SKIP_BINARY_DOWNLOAD: 0
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
 
 jobs:
   build-windows-x64:
-    name: Build Windows x64
     runs-on: windows-2022
-
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 2
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -34,42 +29,31 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: '3.11'
 
-      - name: Install build dependencies
+      - name: Global tools install
         run: |
           npm install -g gulp typescript
         shell: pwsh
 
-      - name: Install project dependencies
-        run: |
-          npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+      - name: Install all dependencies
+        run: npm ci
         shell: pwsh
 
-      - name: Compile project
+      - name: Full TypeScript compile
         run: npm run compile
         shell: pwsh
 
-      # 只编译：绿色版、带所有依赖、可直接运行的文件夹
-      - name: Build VS Code Win32 x64
-        run: npm run gulp vscode-win32-x64-min-ci
+      # 官方完整构建指令，不是min-ci精简版！彻底解决preload.js缺失报错
+      - name: Build full portable win32-x64 folder
+        run: npm run gulp vscode-win32-x64
         shell: pwsh
 
-      # 打包成 zip 方便下载
-      - name: Create portable archive
-        run: |
-          Compress-Archive -Path ..\VSCode-win32-x64\* -DestinationPath ..\VSCode-win32-x64.zip
-        shell: pwsh
-
-      # 上传产物：只有绿色版文件夹 + zip
-      - name: Upload portable build
+      # 仅上传完整绿色文件夹，无任何安装包、无setup、无打包程序
+      - name: Upload full portable code folder
         uses: actions/upload-artifact@v4
         with:
-          name: VSCode-Win32-x64-Portable
-          path: |
-            ../VSCode-win32-x64/
-            ../VSCode-win32-x64.zip
+          name: VSCode-win32-x64
+          path: ../vscode-win32-x64/
           retention-days: 7
+          if-no-files-found: error
